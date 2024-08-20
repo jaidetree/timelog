@@ -24,11 +24,12 @@
           {:select [:*]
            :from [[:tasks :t]]
            :join-by [:join [[:statuses :s]
-                            [:= :s.id :t.status_id]]]
+                            [:= :t.status_id :s.id]]]
            :where [:and [:= :t.is_active true]
                         [:not= :s.status "Archived"]
                         [:not= :s.status "Deferred"]]
            :order-by [:status_id]})
+        (p/catch js/console.error)
         (group-tasks-by-status)
         (print-tasks)))
 

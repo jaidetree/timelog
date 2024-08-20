@@ -5,7 +5,11 @@
     [timelog.db :as db]
     [timelog.commands :as cmd]
     [timelog.commands.list]
-    [timelog.commands.new-task]))
+    [timelog.commands.complete-task]
+    [timelog.commands.new-task]
+    [timelog.commands.start-task]
+    [timelog.commands.stop-task]
+    [timelog.commands.status]))
 
 (defn -main
   [cmd & args]

@@ -55,39 +55,140 @@ CREATE TABLE sessions (
     is_active BOOLEAN DEFAULT TRUE,
     task_id INTEGER REFERENCES tasks(id),
     start_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    end_time TIMESTAMPTZ DEFAULT NULL
+    end_time TIMESTAMPTZ DEFAULT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TRIGGER sessions_updated_at_trigger
 BEFORE UPDATE ON sessions
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+-- Look up task id given a task name
+
+CREATE OR REPLACE FUNCTION get_task_id_by_name(p_task_name VARCHAR)
+RETURNS INTEGER AS $$
+BEGIN
+  RETURN (
+    SELECT id
+    FROM tasks
+    WHERE task_name = p_task_name
+  );
+END;
+$$ LANGUAGE plpgsql;
+
 -- Create a start_task function
 
-CREATE OR REPLACE FUNCTION start_task(p_task_id INTEGER)
-RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION start_task(p_task_name VARCHAR)
+RETURNS sessions AS $$
+DECLARE
+  task_row RECORD;
+  session_record sessions;
 BEGIN
-    INSERT INTO sessions (task_id, start_time)
-    VALUES (p_task_id, CURRENT_TIMESTAMP);
+  -- Look for any ongoing sessions for an active task
+  SELECT *
+  INTO task_row
+  FROM tasks t
+  INNER JOIN sessions s ON t.id = s.task_id
+  WHERE s.end_time IS NULL
+    AND s.is_active = TRUE
+    AND t.is_active = TRUE
+  LIMIT 1;
+
+  -- If an ongoing session was found, throw an error with hint
+  IF task_row.id IS NOT NULL THEN
+    RAISE EXCEPTION 'Task % \"%\" is still in progress. Action refused.',
+      task_row.id, task_row.task_name;
+  ELSE
+    -- Start the session
+    INSERT INTO sessions (task_id)
+    VALUES (get_task_id_by_name(p_task_name))
+    RETURNING * INTO session_record;
+  END IF;
+
+  RETURN session_record;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Create a stop_task function
 
-CREATE OR REPLACE FUNCTION stop_task(p_task_id INTEGER)
-RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION stop_task(p_task_name VARCHAR)
+RETURNS tasks AS $$
+DECLARE
+  target_task_id INTEGER;
+  updated_task tasks;
 BEGIN
-    UPDATE sessions
-    SET end_time = CURRENT_TIMESTAMP
-    WHERE task_id = p_task_id
-    AND id = (
-        SELECT id
-        FROM sessions
-        WHERE task_id = p_task_id
-        AND end_time IS NULL
-        ORDER BY start_time DESC
-        LIMIT 1
-    );
+  SELECT get_task_id_by_name(p_task_name) INTO target_task_id;
+  -- Update task using task_id
+  UPDATE sessions
+  SET end_time = CURRENT_TIMESTAMP
+  WHERE task_id = target_task_id
+  AND id = (
+      SELECT id
+      FROM sessions
+      WHERE task_id = target_task_id
+      AND end_time IS NULL
+      ORDER BY start_time DESC
+      LIMIT 1
+  );
+
+  SELECT * FROM tasks
+  INTO updated_task
+  WHERE id = target_task_id;
+
+  RETURN updated_task;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Complete a task and end a session
+
+CREATE OR REPLACE FUNCTION complete_task(p_task_name VARCHAR)
+RETURNS tasks AS $$
+DECLARE
+  target_task_id INTEGER;
+  updated_task tasks;
+  task_row RECORD;
+BEGIN
+  SELECT get_task_id_by_name(p_task_name) INTO target_task_id;
+
+  -- Look for any ongoing sessions for an active task
+  SELECT
+    t.*,
+    s.id AS session_id,
+    s.task_id,
+    s.start_time,
+    s.end_time
+  INTO task_row
+  FROM tasks t
+  INNER JOIN sessions s ON t.id = s.task_id
+  WHERE
+    s.task_id = target_task_id
+    AND s.is_active = true
+    AND t.is_active = true
+  ORDER BY s.end_time DESC
+  LIMIT 1;
+
+  IF task_row.end_time IS NOT NULL THEN
+    RAISE EXCEPTION 'Task % \"%\" already completed. Action refused.',
+      task_row.id, task_row.task_name;
+  END IF;
+
+  IF task_row.id IS NULL THEN
+    RAISE EXCEPTION 'Task % \"%\" not found. Action refused.',
+      task_row.id, task_row.task_name;
+  END IF;
+
+  PERFORM stop_task(p_task_name);
+  UPDATE tasks
+  SET status_id = (
+    SELECT id
+    FROM statuses
+    WHERE status = 'Complete'
+  )
+  WHERE id = get_task_id_by_name(p_task_name)
+  RETURNING * INTO updated_task;
+
+  RETURN updated_task;
 END;
 $$ LANGUAGE plpgsql;
 

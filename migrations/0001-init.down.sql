@@ -1,5 +1,7 @@
+DROP FUNCTION IF EXISTS complete_task;
 DROP FUNCTION IF EXISTS start_task;
 DROP FUNCTION IF EXISTS stop_task;
+DROP FUNCTION IF EXISTS get_task_id_by_name;
 
 DROP TRIGGER IF EXISTS sessions_updated_at_trigger ON sessions;
 DROP TABLE IF EXISTS sessions;
